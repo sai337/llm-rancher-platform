@@ -1,0 +1,131 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: model-sync
+  namespace: llm
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: model-sync
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: llm-models-rwx
+        - name: manifest
+          configMap:
+            name: llm-model-manifest
+        - name: artifactory-token
+          secret:
+            secretName: artifactory-token
+      containers:
+        - name: sync
+          image: alpine:3.20
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities:
+              drop: ["ALL"]
+          command: ["/bin/sh","-lc"]
+          args:
+            - |
+              set -euo pipefail
+              apk add --no-cache curl coreutils tar zstd python3
+              TOKEN="$(cat /secrets/token)"
+
+              python3 - <<'PY'
+              import os, sys, yaml, subprocess, textwrap
+              from pathlib import Path
+
+              manifest_path = Path("/config/manifest.yaml")
+              if not manifest_path.exists():
+                print("ERROR: manifest not found", file=sys.stderr)
+                sys.exit(2)
+
+              data = yaml.safe_load(manifest_path.read_text())
+              base = data["artifactory"]["base_url"].rstrip("/")
+              artifacts = data.get("artifacts", [])
+
+              token = os.environ.get("TOKEN")
+              if not token:
+                print("ERROR: TOKEN missing", file=sys.stderr)
+                sys.exit(2)
+
+              models_root = Path("/models")
+              models_root.mkdir(parents=True, exist_ok=True)
+
+              def curl(url, out):
+                cmd = ["curl","-fL","--retry","5","--retry-delay","2",
+                       "-H", f"Authorization: Bearer {token}",
+                       url, "-o", str(out)]
+                subprocess.check_call(cmd)
+
+              def sha256(path):
+                out = subprocess.check_output(["sha256sum", str(path)]).decode().split()[0]
+                return out
+
+              for a in artifacts:
+                name = a["name"]
+                url_path = a["url_path"].lstrip("/")
+                expected = a["sha256"]
+                extract_to = a["extract_to"]
+                url = f"{base}/{url_path}"
+
+                # store archives under /models/_archives
+                archives_dir = models_root / "_archives"
+                archives_dir.mkdir(exist_ok=True)
+                out_file = archives_dir / Path(url_path).name
+                tmp = archives_dir / (out_file.name + ".partial")
+
+                print(f"[{name}] download {url}")
+                curl(url, tmp)
+
+                got = sha256(tmp)
+                if got != expected:
+                  print(f"ERROR: sha256 mismatch for {name}", file=sys.stderr)
+                  print(f"  expected: {expected}", file=sys.stderr)
+                  print(f"  got:      {got}", file=sys.stderr)
+                  sys.exit(3)
+
+                tmp.rename(out_file)
+                print(f"[{name}] verified sha256 OK")
+
+                # Extract tar.zst
+                dest = Path(extract_to)
+                dest.mkdir(parents=True, exist_ok=True)
+                print(f"[{name}] extract -> {dest}")
+                subprocess.check_call(["tar","--use-compress-program=unzstd","-xf", str(out_file), "-C", str(dest)])
+
+              print("All artifacts synced successfully.")
+              PY
+          env:
+            - name: TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: artifactory-token
+                  key: token
+          volumeMounts:
+            - name: models
+              mountPath: /models
+            - name: manifest
+              mountPath: /config
+              readOnly: true
+            - name: artifactory-token
+              mountPath: /secrets
+              readOnly: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llm-model-manifest
+  namespace: llm
+data:
+  manifest.yaml: |

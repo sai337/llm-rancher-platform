@@ -1,0 +1,57 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llm-model-manifest
+  namespace: llm
+data:
+  manifest.yaml: |
+    # models/manifest.yaml
+    # This file is **source of truth** for model artifacts expected on the cluster.
+    #
+    # You should:
+    # - Publish artifacts to Artifactory (recommended: .tar.zst + sha256)
+    # - Record expected sha256 here
+    # - Sync job downloads these files and verifies sha256 before extracting/using
+    #
+    # Suggested artifact conventions:
+    # - GGUF for Ollama:   <name>.gguf or packed tar.zst containing /gguf/<name>.gguf
+    # - HF for vLLM:       packed tar.zst containing /hf/<model-dir>/ (config.json, tokenizer, safetensors, etc.)
+    #
+    # NOTE: Do not store tokens here. Token is mounted as a Kubernetes secret.
+    
+    artifactory:
+      base_url: "https://ARTIFACTORY_HOST/artifactory/llm-models"
+      auth_header: "Authorization: Bearer"
+    
+    artifacts:
+      - name: "llama-7b-q4-gguf"
+        kind: "gguf"
+        url_path: "gguf/llama-7b-q4_k_m.tar.zst"
+        sha256: "REPLACE_WITH_REAL_SHA256"
+        extract_to: "/models/gguf"
+    
+      - name: "qwen-7b-q4-gguf"
+        kind: "gguf"
+        url_path: "gguf/qwen-7b-q4_k_m.tar.zst"
+        sha256: "REPLACE_WITH_REAL_SHA256"
+        extract_to: "/models/gguf"
+    
+      - name: "gpt-2-hf"
+        kind: "hf"
+        url_path: "hf/gpt2-hf.tar.zst"
+        sha256: "REPLACE_WITH_REAL_SHA256"
+        extract_to: "/models/hf"
+    
+      - name: "llama-7b-hf"
+        kind: "hf"
+        url_path: "hf/llama-7b-hf.tar.zst"
+        sha256: "REPLACE_WITH_REAL_SHA256"
+        extract_to: "/models/hf"
+    
+      - name: "qwen-7b-hf"
+        kind: "hf"
+        url_path: "hf/qwen-7b-hf.tar.zst"
+        sha256: "REPLACE_WITH_REAL_SHA256"
+        extract_to: "/models/hf"
+    
+      # Add your "gpt-oss-7b" artifacts in one of the two formats above

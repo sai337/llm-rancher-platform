@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  namespace: llm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm
+  template:
+    metadata:
+      labels:
+        app: vllm
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: llm-models-rwx
+      containers:
+        - name: vllm
+          # TODO: replace with your INTERNAL registry mirror
+          image: vllm/vllm-openai:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            # IMPORTANT: this must point to an extracted HF model dir on the PVC
+            - "--model=/models/hf/llama-7b-hf"
+            - "--host=0.0.0.0"
+            - "--port=8000"
+          env:
+            # vLLM CPU tuning knobs (adjust per node)
+            - name: VLLM_CPU_OMP_THREADS_BIND
+              value: "auto"
+            # KV cache space in GiB; trade-off: concurrency vs RAM
+            - name: VLLM_CPU_KVCACHE_SPACE
+              value: "24"
+          ports:
+            - containerPort: 8000
+              name: http
+          resources:
+            # Guaranteed QoS helps CPU stability; set requests == limits
+            requests:
+              cpu: "32"
+              memory: "64Gi"
+            limits:
+              cpu: "32"
+              memory: "64Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+          volumeMounts:
+            - name: models
+              mountPath: /models
+          livenessProbe:
+            httpGet:
+              path: /v1/models
+              port: 8000
+            initialDelaySeconds: 45
+            periodSeconds: 20
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /v1/models
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
